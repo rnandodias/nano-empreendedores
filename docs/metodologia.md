@@ -93,9 +93,75 @@ Os números batem com publicações oficiais da PNADC trimestral (~26 M conta-pr
 
 A executar em iteração seguinte da Etapa 1.
 
-### 3.3 Cadastro MEI — pendente
+### 3.3 Cadastro MEI — execução em 2026-05-09
 
-A executar em iteração seguinte da Etapa 1. Requer dump CNPJ da Receita Federal e filtro por `OPCAO_MEI`.
+**Snapshot processado:** Dados Abertos CNPJ da Receita Federal, mês de referência **2026-04**.
+
+**Endpoint utilizado** (validado, ver ADR-006):
+
+```text
+WebDAV público — Nextcloud RFB
+https://arquivos.receitafederal.gov.br/public.php/webdav/2026-04/<arquivo>.zip
+Basic Auth: user="YggdBLfdninEJX9" (share token)  password=""
+```
+
+**Arquivos baixados** (5,47 GB no total, hashes SHA-256 em `data/raw/mei/2026-04/*.meta.json`):
+
+| Arquivo | Tamanho | Uso |
+| --- | --- | --- |
+| `Simples.zip` | 291 MB | Filtro `opcao_mei = 'S'` E `data_exclusao_mei` vazia |
+| `Estabelecimentos0..9.zip` | 5,18 GB | Cruzamento por `cnpj_basico`, `identificador_matriz_filial = '1'` (matriz) |
+| `Cnaes.zip` | 22 KB | Tabela auxiliar de descrição CNAE |
+| `Municipios.zip` | 41 KB | Tabela auxiliar (de-para RFB → IBGE pendente) |
+
+`Empresas*.zip` **não foram baixados** — não necessários para os recortes da Etapa 2 (UF × CNAE × estrato). Decisão registrada em ADR-006.
+
+**Estratégia em 4 passos** (implementada em `src/ingest/mei.py`):
+
+1. Lê `Simples.zip` em memória → filtra `opcao_mei == 'S'` E `data_exclusao_mei == '0'/vazia` → conjunto de `cnpj_basico` MEI vigentes.
+2. Lê os 10× `Estabelecimentos*.zip` em chunks (`pd.read_csv` chunked) → mantém apenas `identificador_matriz_filial = '1'` (matriz) E `cnpj_basico` no conjunto MEI.
+3. Calcula `cnpj_completo` (14 dígitos) e a coluna derivada `mei_ativo = (situacao_cadastral == '02')`.
+4. Deriva `cnae_principal_secao` (letra A–U) a partir da divisão CNAE (2 primeiros dígitos do `cnae_fiscal_principal`).
+
+**Resultado:** `data/processed/mei_ativos.parquet` — 303 MB.
+
+**Sanity checks** (registrados em `data/processed/mei_ativos.meta.json`):
+
+- 48.097.045 linhas no Simples (universo Simples Nacional)
+- 16.791.885 linhas com `opcao_mei = 'S'`
+- 16.788.816 linhas com MEI vigente (não excluído)
+- 70.864.002 linhas no Estabelecimentos (Brasil completo)
+- 16.788.816 matrizes MEI vigentes — bate com a contagem do Simples ✓
+- **13.274.159 MEI ATIVOS** (situação cadastral `'02'`)
+- 3.494.157 inaptos (`'04'`), 18.328 suspensos (`'03'`), 2.132 baixados (`'08'`)
+
+**Top 5 UFs por MEI ativo:**
+
+| UF | MEI ativos | % do total |
+| --- | --- | --- |
+| SP | 3.760.305 | 28,3% |
+| MG | 1.497.547 | 11,3% |
+| RJ | 1.275.727 | 9,6% |
+| PR | 925.897 | 7,0% |
+| RS | 839.262 | 6,3% |
+
+**Top 6 seções CNAE** (relevante para o recorte ABEVD — venda direta, comércio, serviços pessoais):
+
+| Seção | Descrição | MEI ativos | % |
+| --- | --- | --- | --- |
+| G | Comércio; reparação de veículos | 3.085.819 | 23,3% |
+| H | Transporte, armazenagem e correio | 1.774.947 | 13,4% |
+| **S** | **Outras atividades de serviços** (cabeleireiro, estética, etc.) | **1.480.909** | **11,2%** |
+| C | Indústrias de transformação | 1.264.963 | 9,5% |
+| I | Alojamento e alimentação | 1.185.293 | 8,9% |
+| F | Construção | 1.148.453 | 8,6% |
+
+A combinação **G + S** (comércio + serviços pessoais) cobre **34,5% dos MEI ativos** — público naturalmente alinhado ao modelo de venda direta da ABEVD.
+
+**Pendências documentadas** (não bloqueiam Etapa 2):
+
+- `municipio_codigo_ibge` ainda vazio — só temos `municipio_codigo_rfb` (TOM, 4 dígitos). De-para RFB→IBGE será implementado se a Etapa 3 exigir granularidade municipal.
+- Harmonização CNAE 2.0 ↔ 2.3 entre PNADC e MEI — ainda como TODO em `src/transform/harmonize.py::harmonize_cnae`. Para a Etapa 2, agregação por seção (A–U) é estável entre as versões.
 
 ## 4. Etapa 2 — Estimativa do universo
 

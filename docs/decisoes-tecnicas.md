@@ -114,6 +114,34 @@ Formato:
 - (−) Se o IBGE publicar dicionário com sufixo de data diferente, é preciso atualizar `DICIONARIO_ZIP_URL`. Mitigação: monitorar `Documentacao/`.
 - (−) Lemos cada arquivo trimestral inteiro em memória (~500 mil linhas × 37 colunas ≈ 12 MB parquet) — confortável; se passarmos para microdados anuais (~3 M linhas), avaliar leitura em chunks.
 
+## ADR-006 — Ingestão MEI: snapshot 2026-04, sem `Empresas*.zip`, definição de "ativo"
+
+**Data:** 2026-05-09
+**Status:** aceito
+
+**Contexto:** Os Dados Abertos CNPJ da Receita Federal são publicados mensalmente. Um snapshot completo soma ~25 GB (Empresas + Estabelecimentos + Sócios + Simples + auxiliares). Para o projeto interessam apenas as pessoas com opção MEI ativa, não todo o universo CNPJ. Além disso, a partir de janeiro/2026 a RFB migrou os arquivos para um Nextcloud público em `arquivos.receitafederal.gov.br/index.php/s/YggdBLfdninEJX9` — URLs antigas (`https://arquivos.receitafederal.gov.br/dados/cnpj/...` e `https://dadosabertos.rfb.gov.br/CNPJ/`) retornam 404 ou são inacessíveis. Há ambiguidade sobre o que é "MEI ativo": pode-se filtrar por (a) opção MEI no Simples; (b) situação cadastral do estabelecimento; (c) interseção dos dois.
+
+**Decisão:**
+
+1. **Snapshot:** usar `2026-04` (último estável disponível em 09/05/2026). Snapshots futuros podem ser ingeridos sob demanda — basta `python -m src.ingest.mei --periodo YYYY-MM`.
+2. **Endpoint:** WebDAV público do Nextcloud RFB. URL canônica `https://arquivos.receitafederal.gov.br/public.php/webdav/<YYYY-MM>/<arquivo>.zip` com Basic Auth (user = share token `YggdBLfdninEJX9`, password vazia). Documentado na docstring de `src/ingest/mei.py` e em memória persistente do agente.
+3. **NÃO baixar `Empresas*.zip`:** essa tabela traz razão social, capital social e porte — nenhum desses campos é necessário para os recortes da Etapa 2 (UF × CNAE × estrato demográfico). Economiza ~5 GB de download e o tempo correspondente. Se for necessário enriquecer com razão social no futuro (ex.: análise qualitativa por nome), basta voltar e baixar.
+4. **NÃO baixar `Socios*.zip`:** sócios são irrelevantes para MEI (que é sempre titular único).
+5. **Definição operacional de "MEI ativo":** combinação dos dois critérios em ordem:
+    a) **Vigência da opção MEI** no Simples: `opcao_mei = 'S'` E `data_exclusao_mei` vazia/`'0'` → captura quem é MEI no momento, excluindo ex-MEI já desenquadrados.
+    b) **Situação cadastral do estabelecimento matriz:** `situacao_cadastral = '02'` (ativa) na tabela Estabelecimentos. Estabelecimentos suspensos (`'03'`), inaptos (`'04'`) ou baixados (`'08'`) **não** são contados como MEI ativo, mesmo que ainda figurem no Simples.
+6. **Coluna persistida:** `mei_ativo: bool = (situacao_cadastral == '02')`, calculada sobre o universo já restrito a MEI vigente. Permite ao consumidor da Etapa 2 escolher entre "MEI vigente" (todos) ou "MEI ativo" (situação 02) sem refazer o filtro.
+7. **Identificador de matriz:** `identificador_matriz_filial = '1'` (matriz). MEI por construção tem 1 estabelecimento — o filtro elimina duplicação quando algum CNPJ MEI eventualmente tem filial registrada.
+
+**Consequências:**
+
+- (+) Download reduzido em ~5 GB (~25%) sem perder informação relevante para o estudo.
+- (+) Definição de "ativo" alinhada à prática de mercado (Sebrae publica seus rankings por situação cadastral '02').
+- (+) Resultado validado: 13.274.159 MEI ativos no Brasil em 2026-04 — bate com a ordem de grandeza esperada (estatísticas Sebrae em torno de 13-15 milhões na janela 2025-2026).
+- (+) Top UFs (SP, MG, RJ, PR, RS) e top seções CNAE (G, H, S, C, I) compatíveis com publicações oficiais.
+- (−) Se o estudo da ABEVD vier a exigir análise por razão social ou capital social, será preciso ingestão adicional de `Empresas*.zip` (~5 GB) — o pipeline já está estruturado para isso.
+- (−) `municipio_codigo_ibge` ficou vazio (apenas o código RFB foi resolvido). Se análises municipais forem necessárias na Etapa 3, implementar de-para RFB→IBGE via `Municipios.zip` cruzado com a tabela IBGE de municípios. Pendência registrada.
+
 ---
 
 (Próximas decisões a registrar pelos agentes ao longo da execução.)
