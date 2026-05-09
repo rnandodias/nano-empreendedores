@@ -142,6 +142,40 @@ Formato:
 - (−) Se o estudo da ABEVD vier a exigir análise por razão social ou capital social, será preciso ingestão adicional de `Empresas*.zip` (~5 GB) — o pipeline já está estruturado para isso.
 - (−) `municipio_codigo_ibge` ficou vazio (apenas o código RFB foi resolvido). Se análises municipais forem necessárias na Etapa 3, implementar de-para RFB→IBGE via `Municipios.zip` cruzado com a tabela IBGE de municípios. Pendência registrada.
 
+## ADR-007 — Censo 2022: pular Etapa 1 e seguir só com PNADC + MEI
+
+**Data:** 2026-05-09
+**Status:** aceito
+
+**Contexto:** A minuta técnica prevê três fontes na Etapa 1: PNAD Contínua, Censo Demográfico e Cadastro MEI. PNADC e MEI já foram ingeridos (ADR-005 e ADR-006). Antes de baixar o Censo, verificamos a disponibilidade dos **microdados da Amostra do Censo Demográfico 2022** — única fração do Censo que carrega as variáveis de trabalho/ocupação/renda necessárias para nossos recortes. Resultado da verificação em 2026-05-09:
+
+- O FTP oficial `https://ftp.ibge.gov.br/Censos/Censo_Demografico_2022/` contém apenas Resultados do Universo e agregações por setor censitário. **Não há pasta de Microdados da Amostra.**
+- A divulgação oficial estava agendada para 04/12/2025 e foi **adiada sem nova data** ([nota IBGE](https://www.ibge.gov.br/novo-portal-erramos/45278-adiamento-das-divulgacoes-censo-demografico-2022-microdados-da-amostra-e-censo-demografico-2022-areas-de-ponderacao.html)). Justificativa oficial: adequação à LGPD e a boas práticas internacionais de estatísticas oficiais.
+- As alternativas seriam: (a) Censo 2010 (15 anos defasado, contrário à intenção da minuta de retratar cenário atual); (b) consumir agregados por setor censitário do Censo 2022 (viola ADR-004 — só microdados); (c) esperar publicação (prazo indefinido bloqueia entregáveis).
+
+**Decisão:** Concluir a Etapa 1 **sem o Censo 2022**, com PNADC + MEI. Razões:
+
+1. A minuta usa Censo como "**referência estrutural em nível municipal**" — complementar à PNADC, não substitutivo. PNADC sozinha é representativa por UF, que é a granularidade exigida pelos objetivos do estudo.
+2. As variáveis demográficas e econômicas centrais do estudo (sexo, idade, cor/raça, escolaridade, posição na ocupação, rendimento, CNAE) estão na PNADC.
+3. MEI cobre a dimensão de formalização — completa o triângulo informal (PNADC) × formal (MEI) sem depender do Censo.
+4. Aguardar prazo indefinido bloqueia o cronograma da minuta (3 meses).
+
+Quando o IBGE publicar os Microdados da Amostra, **rodar `python -m src.ingest.censo --tabela amostra` para enriquecer com:**
+
+- Análise em nível municipal (densidade, perfil demográfico subestadual)
+- Validação cruzada das estimativas estaduais da PNADC
+- Recortes por situação domiciliar (urbano/rural) com maior precisão
+
+**Consequências:**
+
+- (+) Cronograma do projeto preservado.
+- (+) Entregáveis (Etapas 2-4) podem prosseguir sem dependência externa em prazo aberto.
+- (+) Decisão totalmente rastreável no relatório final via este ADR.
+- (−) Análise municipal fica fora do escopo desta versão. Será retomada em iteração futura sob demanda da ABEVD ou quando publicada a Amostra.
+- (−) Validação cruzada PNADC × Censo (recomendada pela boa prática) não pode ser feita agora — somente comparação com publicações tabulares do IBGE/PNADC anterior.
+
+**Pendência registrada em `src/ingest/censo.py`:** o esqueleto da função fica como `NotImplementedError` com comentário apontando para este ADR.
+
 ---
 
 (Próximas decisões a registrar pelos agentes ao longo da execução.)

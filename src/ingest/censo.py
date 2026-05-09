@@ -2,9 +2,24 @@
 
 Fonte oficial:
     https://www.ibge.gov.br/estatisticas/sociais/trabalho/22827-censo-demografico-2022.html
+    FTP: https://ftp.ibge.gov.br/Censos/Censo_Demografico_2022/
 
-Os microdados do Censo são pesados (vários GB por UF). O download é feito por UF para
-permitir paralelização e retomada.
+ESTADO ATUAL (2026-05-09): os microdados da AMOSTRA do Censo 2022 — fonte
+das variáveis de trabalho/ocupação/renda/CNAE necessárias ao estudo —
+ainda NÃO foram publicados pelo IBGE. Divulgação prevista para 04/12/2025
+foi adiada sem nova data definida (motivo: adequação à LGPD e padrões
+internacionais). O FTP só contém Resultados do Universo (perguntas
+básicas) e agregados por setor censitário — insuficientes para nossos
+recortes e violando ADR-004 (microdados only).
+
+Decisão registrada em ADR-007 (docs/decisoes-tecnicas.md): a Etapa 1 do
+projeto Nano-empreendedores ABEVD foi concluída SEM o Censo 2022, com
+PNADC + MEI. Quando o IBGE publicar a Amostra, retomar este módulo para
+enriquecer com análise municipal e validação cruzada das estimativas.
+
+Quando voltar a implementar, considerar: download por UF (vários GB
+cada), retomada via Range (reusar padrão de _http_download em pnadc.py
+e mei.py), watchdog para downloads longos (reusar scripts/mei_watchdog.py).
 """
 
 from __future__ import annotations

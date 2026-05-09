@@ -89,9 +89,16 @@ Os números batem com publicações oficiais da PNADC trimestral (~26 M conta-pr
 - `uf` — convertida do código IBGE 2 dígitos para sigla.
 - **Preservados** na base processada: `peso_amostral` (V1028), `upa`, `estrato`, `id_pessoa`, `id_domicilio`, `ano`, `trimestre` — necessários para Etapa 2 (estimadores com desenho complexo).
 
-### 3.2 Censo Demográfico — pendente
+### 3.2 Censo Demográfico — adiado pelo IBGE; estudo segue sem ele (ver ADR-007)
 
-A executar em iteração seguinte da Etapa 1.
+**Status em 2026-05-09:** Os **microdados da Amostra do Censo Demográfico 2022** ainda **não foram publicados** pelo IBGE. A divulgação estava prevista para 04/12/2025 e foi adiada sem nova data definida — motivo oficial: "adequação aos padrões de disponibilização em formato compatível com a legislação vigente sobre proteção de dados e alinhado às boas práticas internacionais atuais das estatísticas oficiais" ([nota oficial IBGE](https://www.ibge.gov.br/novo-portal-erramos/45278-adiamento-das-divulgacoes-censo-demografico-2022-microdados-da-amostra-e-censo-demografico-2022-areas-de-ponderacao.html)).
+
+**O que está publicado** (insuficiente para nosso recorte):
+
+- Resultados do Universo (perguntas básicas — sexo, idade, cor/raça, situação domicílio) — **não tem** posição na ocupação, rendimento ou CNAE
+- Agregados por setor censitário (já tabulados) — viola ADR-004 (microdados only)
+
+**Decisão (ver ADR-007):** Pular Censo nesta iteração. PNADC sozinha é estatisticamente representativa em nível UF (objetivo central da minuta). Quando IBGE publicar a Amostra, retomamos para enriquecer com análise municipal.
 
 ### 3.3 Cadastro MEI — execução em 2026-05-09
 
