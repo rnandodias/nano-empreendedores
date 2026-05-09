@@ -92,4 +92,28 @@ Formato:
 
 ---
 
+## ADR-005 — Parser PNADC: layout fixo do input SAS oficial, sem dependência de terceiros
+
+**Data:** 2026-05-09
+**Status:** aceito
+
+**Contexto:** Para ler microdados PNADC em layout fixo precisamos das posições e larguras de cada coluna no arquivo `.txt` interno do ZIP do IBGE. Existem três caminhos:
+
+1. **Pacote de terceiros** (`PNADcIBGE` em R, `python-microdadosbrasil`, `basedosdados`) — consome as bases já tratadas. Vantagem: rápido. Desvantagem: trazem dependências pesadas, podem aplicar filtros/recodificações silenciosas, atualizam fora do nosso ciclo, e o `basedosdados` historicamente serve dados via BigQuery/parquet **agregados ou pré-processados**, o que conflita com ADR-004 (microdados brutos obrigatórios).
+2. **Hard-code do layout** dentro do código — frágil e não rastreável; o layout muda quando o IBGE publica novo dicionário.
+3. **Parser do input SAS oficial** (`input_PNADC_trimestral.sas`) que o próprio IBGE distribui em `Documentacao/Dicionario_e_input_20221031.zip` — a fonte canônica. Cada linha do SAS tem `@<posicao> <NOME> [$]<largura>.`, fácil de extrair com regex.
+
+**Decisão:** Adotar a opção (3). A função `_carregar_layout()` em `src/ingest/pnadc.py` baixa o ZIP de documentação do IBGE (idempotente), extrai o `input_PNADC_trimestral.sas` e parseia via regex `@(\d+)\s+(\w+)\s+(\$)?(\d+)\.`. O resultado é um DataFrame `(nome, inicio, tamanho, tipo)` que alimenta `pd.read_fwf` com `colspecs` 0-based. Seleciona-se um subset de ~37 variáveis (`VARIAVEIS_ALVO`) em vez das ~420 disponíveis, para conter memória. O dicionário também é versionado como artefato em `data/raw/pnadc/`.
+
+**Consequências:**
+
+- (+) Sem dependência externa além de `pandas` + `requests` (já no projeto).
+- (+) Parser sobrevive a futuras revisões do layout PNADC desde que o input SAS oficial siga a mesma sintaxe (estável desde 2014).
+- (+) Conformidade total com ADR-004: lemos o microdado bruto, sem intermediários.
+- (+) Encoding Latin-1 declarado explicitamente — evita corrupção silenciosa.
+- (−) Se o IBGE publicar dicionário com sufixo de data diferente, é preciso atualizar `DICIONARIO_ZIP_URL`. Mitigação: monitorar `Documentacao/`.
+- (−) Lemos cada arquivo trimestral inteiro em memória (~500 mil linhas × 37 colunas ≈ 12 MB parquet) — confortável; se passarmos para microdados anuais (~3 M linhas), avaliar leitura em chunks.
+
+---
+
 (Próximas decisões a registrar pelos agentes ao longo da execução.)

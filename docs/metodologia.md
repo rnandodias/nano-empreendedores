@@ -46,7 +46,56 @@
 
 ## 3. Etapa 1 — Preparação e formatação
 
-(Documentar aqui após execução: trimestre baixado, hash dos arquivos, decisões de harmonização.)
+### 3.1 PNAD Contínua trimestral — execução em 2026-05-09
+
+- **Trimestre solicitado:** 2026Q1
+- **Trimestre efetivamente baixado:** **2025Q4** (fallback automático — 2026Q1 ainda não publicado pelo IBGE; divulgação trimestral esperada para meados de mai/2026)
+- **URL de origem:** `https://ftp.ibge.gov.br/Trabalho_e_Rendimento/Pesquisa_Nacional_por_Amostra_de_Domicilios_continua/Trimestral/Microdados/2025/PNADC_042025.zip`
+- **Tamanho do bruto:** 222.550.359 bytes (~223 MB)
+- **SHA-256 do bruto:** `bc1fa6d44948b0601b6b8f3cf6692e79d743d2b01e1e8b600b34030976b361d9`
+- **Dicionário/input usado:** `Dicionario_e_input_20221031.zip` (input SAS oficial PNADC, layout fixo de 4000 colunas, do qual extraímos posições, larguras e tipos das 37 variáveis selecionadas)
+- **Encoding:** Latin-1 (cp1252) — declarado explicitamente no `pd.read_fwf`
+
+**Saídas geradas:**
+
+| Camada | Arquivo | Tamanho |
+|---|---|---|
+| `data/raw/pnadc/` | `PNADC_042025.zip` (+ `.meta.json`) | 222,6 MB |
+| `data/raw/pnadc/` | `Dicionario_e_input_20221031.zip` + `input_PNADC_trimestral.sas` + `dicionario_PNADC_microdados_trimestral.xls` | 0,4 MB |
+| `data/interim/` | `PNADC_042025.parquet` (37 colunas, todas as observações) | 11,9 MB |
+| `data/processed/` | `PNADC_042025.parquet` (17 colunas harmonizadas) + `.meta.json` | 8,7 MB |
+
+**Sanity checks (PNADC_042025 — 2025Q4):**
+
+| Métrica | Valor |
+|---|---|
+| Registros (pessoas) | 498.494 |
+| Soma dos pesos calibrados (V1028) | 213.130.549 (≈ população do Brasil) |
+| Pessoas ocupadas (qualquer posição) | 224.981 (45,1%) |
+| Conta-própria (VD4009 = 09) | 61.363 (12,3% da amostra; 27,3% dos ocupados) |
+| População conta-própria expandida | 26.108.918 |
+| Pessoas com renda mensal habitual > 0 | 220.419 (44,2%) |
+| Renda mensal habitual média (conta-própria, ponderada) | R$ 3.118,33 |
+| % conta-própria com renda anual ≤ R$ 40 mil | 77,8% (definição preliminar de nano-empreendedor) |
+
+Os números batem com publicações oficiais da PNADC trimestral (~26 M conta-próprias no país), validando o pipeline.
+
+**Decisões de harmonização aplicadas:**
+
+- `cor_raca` — mapeamento V2010 (5 códigos numéricos + 9) → vocabulário interno de 6 rótulos.
+- `escolaridade` — VD3004 (códigos 1–7) colapsado em `sem_instrucao | fundamental | medio | superior`.
+- `posicao_ocupacao` — VD4009 (códigos 01–10) colapsado em `conta_propria | empregado | empregador | domestico | outro`. Não-ocupados ficam como `NaN`.
+- `cnae_secao` — usada diretamente V40132 (seção CNAE Domiciliar 2.0 já entregue como letra A–U pelo IBGE).
+- `uf` — convertida do código IBGE 2 dígitos para sigla.
+- **Preservados** na base processada: `peso_amostral` (V1028), `upa`, `estrato`, `id_pessoa`, `id_domicilio`, `ano`, `trimestre` — necessários para Etapa 2 (estimadores com desenho complexo).
+
+### 3.2 Censo Demográfico — pendente
+
+A executar em iteração seguinte da Etapa 1.
+
+### 3.3 Cadastro MEI — pendente
+
+A executar em iteração seguinte da Etapa 1. Requer dump CNPJ da Receita Federal e filtro por `OPCAO_MEI`.
 
 ## 4. Etapa 2 — Estimativa do universo
 

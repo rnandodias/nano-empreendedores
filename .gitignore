@@ -7,6 +7,10 @@ data/raw/**
 data/interim/**
 !data/interim/.gitkeep
 
+# Bases processadas regeneráveis (também derivadas dos brutos pelo pipeline)
+data/processed/**
+!data/processed/.gitkeep
+
 # Outputs de execução (mantidos só os finais entregáveis)
 outputs/relatorios/**/*.pdf
 outputs/relatorios/**/*.pptx
