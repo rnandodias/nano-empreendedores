@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ titulo | default("Relatório Técnico — Nano-empreendedores no Brasil") }}</title>
+  <style>
+    @page { size: A4; margin: 2.5cm; @bottom-right { content: counter(page); } }
+    body { font-family: "Helvetica", "Arial", sans-serif; font-size: 11pt; color: #1B3A57; line-height: 1.5; }
+    h1 { font-size: 22pt; color: #1B3A57; border-bottom: 3px solid #D9A441; padding-bottom: 0.3em; }
+    h2 { font-size: 16pt; color: #1B3A57; margin-top: 1.5em; }
+    h3 { font-size: 13pt; color: #6B7280; }
+    table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+    th, td { border: 1px solid #D1D5DB; padding: 6px 10px; text-align: left; }
+    th { background: #F3F4F6; }
+    .capa { text-align: center; padding-top: 6cm; page-break-after: always; }
+    .footer-instituicao { font-size: 9pt; color: #6B7280; }
+  </style>
+</head>
+<body>
+
+<section class="capa">
+  <h1>{{ titulo }}</h1>
+  <p>Relatório Técnico — {{ data_emissao }}</p>
+  <p class="footer-instituicao">FGV NPII · ABEVD</p>
+</section>
+
+<h2>1. Introdução</h2>
+{{ introducao | safe }}
+
+<h2>2. Metodologia</h2>
+{{ metodologia | safe }}
+
+<h2>3. Estimativa do Universo</h2>
+{{ secao_universo | safe }}
+
+<h2>4. Caracterização Socioeconômica</h2>
+{{ secao_perfil | safe }}
+
+<h2>5. Análises Comparativas e Achados Estratégicos</h2>
+{{ secao_comparativa | safe }}
+
+<h2>6. Limitações</h2>
+{{ limitacoes | safe }}
+
+<h2>7. Recomendações para a ABEVD</h2>
+{{ recomendacoes | safe }}
+
+<h2>Anexos</h2>
+{{ anexos | safe }}
+
+</body>
+</html>

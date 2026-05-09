@@ -1,0 +1,41 @@
+# Microdados brutos (pesados, baixáveis novamente)
+data/raw/**
+!data/raw/.gitkeep
+!data/raw/**/.gitkeep
+
+# Bases intermediárias regeneráveis
+data/interim/**
+!data/interim/.gitkeep
+
+# Outputs de execução (mantidos só os finais entregáveis)
+outputs/relatorios/**/*.pdf
+outputs/relatorios/**/*.pptx
+!outputs/relatorios/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/scratch/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code (mantém agents/commands; ignora estado local)
+.claude/settings.local.json
+.claude/.cache/

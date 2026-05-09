@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Sumário Executivo — Nano-empreendedores no Brasil</title>
+  <style>
+    @page { size: A4; margin: 2cm; }
+    body { font-family: "Helvetica", "Arial", sans-serif; font-size: 11pt; color: #1B3A57; line-height: 1.45; }
+    h1 { font-size: 20pt; color: #1B3A57; border-bottom: 2px solid #D9A441; }
+    h2 { font-size: 14pt; color: #1B3A57; margin-top: 1.2em; }
+    .destaque { background: #FEF3C7; padding: 12px; border-left: 4px solid #D9A441; margin: 1em 0; }
+  </style>
+</head>
+<body>
+
+<h1>Sumário Executivo</h1>
+<p><em>Estimativa e Caracterização do Universo de Nano-empreendedores no Brasil — {{ data_emissao }}</em></p>
+
+<h2>Principais achados</h2>
+{{ achados | safe }}
+
+<h2>Recortes estratégicos para a ABEVD</h2>
+{{ recortes_abevd | safe }}
+
+<div class="destaque">
+  <strong>Recomendações prioritárias:</strong>
+  {{ recomendacoes_top | safe }}
+</div>
+
+</body>
+</html>
