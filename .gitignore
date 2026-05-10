@@ -11,10 +11,13 @@ data/interim/**
 data/processed/**
 !data/processed/.gitkeep
 
-# Outputs de execução (mantidos só os finais entregáveis)
-outputs/relatorios/**/*.pdf
-outputs/relatorios/**/*.pptx
-!outputs/relatorios/.gitkeep
+# Outputs entregáveis (PDFs e PPTX) ficam VERSIONADOS — são pequenos
+# (< 1 MB cada) e servem como auditoria histórica das entregas. Apenas
+# rascunhos com sufixo "_draft" ou "_tmp" são ignorados.
+outputs/relatorios/**/*_draft.pdf
+outputs/relatorios/**/*_tmp.pdf
+outputs/relatorios/**/*_draft.pptx
+outputs/relatorios/**/*_tmp.pptx
 
 # Python
 __pycache__/
