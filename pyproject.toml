@@ -10,9 +10,13 @@ readme = "README.md"
 
 dependencies = [
     # núcleo de dados
-    "pandas>=2.2",
+    "pandas>=2.2,<3.0",
     "pyarrow>=15.0",
-    "numpy>=1.26",
+    # numpy <2 obrigatório: pandas 2.x e várias libs nativas (contourpy,
+    # gensim, numba) ainda foram compiladas com a ABI numpy 1.x. Subir para
+    # numpy 2.x quebra import silenciosamente. Re-avaliar quando pandas 3.x
+    # for o default e os wheels de matplotlib forem recompilados.
+    "numpy>=1.26,<2.0",
 
     # microdados IBGE
     "requests>=2.32",

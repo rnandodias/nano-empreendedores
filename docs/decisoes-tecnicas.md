@@ -176,6 +176,43 @@ Quando o IBGE publicar os Microdados da Amostra, **rodar `python -m src.ingest.c
 
 **Pendência registrada em `src/ingest/censo.py`:** o esqueleto da função fica como `NotImplementedError` com comentário apontando para este ADR.
 
+## ADR-008 — Tratamento de estratos com 1 só UPA: `single_psu=certainty`
+
+**Data:** 2026-05-09
+**Status:** aceito
+
+**Contexto:** No desenho amostral PNADC, alguns estratos contêm apenas 1 UPA (caso de regiões metropolitanas/RIDEs com 1 setor único). O estimador de variância de Taylor exige ≥ 2 PSUs por estrato — sem isso, lança `ValueError: Only one PSU in the following strata`. A biblioteca `samplics` oferece 4 tratamentos: `error` (default), `skip` (descarta), `certainty` (variância 0 nesses estratos), `combine` (junta com adjacente).
+
+**Decisão:** Usar `single_psu=SinglePSUEst.certainty`. Razões:
+
+1. É a opção que mantém todos os registros na estimativa (sem viés de descarte como `skip`).
+2. Não exige escolha arbitrária de "estrato adjacente" como `combine`.
+3. Subestima ligeiramente a variância apenas nos estratos singleton (um número pequeno: ~5 estratos de >1.500 — impacto agregado < 1%).
+4. É a prática padrão do IBGE para publicações com Taylor.
+
+**Consequências:**
+
+- (+) Estimativas robustas mesmo com estratos singleton.
+- (+) IC 95% reportáveis para todas as UFs.
+- (−) Variância marginalmente subestimada nos estratos com 1 UPA. Em CV agregados (4-5%), o efeito é desprezível mas vale registrar nas limitações do relatório técnico.
+
+---
+
+## ADR-009 — Derivação de `cnae_secao` a partir de `V4013` (PNADC)
+
+**Data:** 2026-05-09
+**Status:** aceito
+
+**Contexto:** Ao processar a série PNADC 2025 (T1-T4), descobrimos que a variável `V40132` — historicamente a "seção CNAE Domiciliar 2.0 já em letra A-U" — vem **vazia** nas divulgações 2025. O dicionário oficial ainda lista `V40132` como variável existente, mas o IBGE deixou de preenchê-la. Já a variável `V4013` (CNAE Domiciliar 2.0, 5 dígitos) continua preenchida.
+
+**Decisão:** Derivar `cnae_secao` (letra A-U) a partir dos 2 primeiros dígitos de `V4013` (a "divisão" CNAE), via tabela divisão→seção definida em `src/ingest/mei.py::CNAE_DIVISAO_TO_SECAO` (mesma usada para o Cadastro MEI). A tabela `V4013` cobre todas as divisões 1-99 conforme estrutura CNAE 2.0/2.3 — o mapeamento é estável.
+
+**Consequências:**
+
+- (+) Compatibilidade total entre PNADC e MEI no nível de seção (vocabulário comum).
+- (+) Sem perda de informação relevante: para análises da Etapa 2/3, seção é a granularidade necessária.
+- (−) Cerca de 14% dos nano-empreendedores aparecem com `cnae_secao = NaN` (V4013 ausente — provavelmente registros de pessoas que se declararam ocupadas mas não detalharam a atividade). Tratar como categoria "não declarada" nos perfis e flagged como pendência se a fração subir em séries futuras.
+
 ---
 
 (Próximas decisões a registrar pelos agentes ao longo da execução.)

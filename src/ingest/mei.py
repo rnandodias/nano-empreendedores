@@ -186,7 +186,16 @@ CNAE_DIVISAO_TO_SECAO: tuple[tuple[int, int, str], ...] = (
 
 def cnae_para_secao(cnae: str | None) -> str | None:
     """Devolve a letra da seção CNAE (A-U) a partir do código (5 ou 7 dígitos)."""
-    if cnae is None or cnae == "" or pd.isna(cnae):
+    # Ordem importa: pd.isna precisa vir ANTES de comparações com '==' porque
+    # pd.NA não suporta operador booleano (TypeError: boolean ambiguous).
+    if cnae is None:
+        return None
+    try:
+        if pd.isna(cnae):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if cnae == "":
         return None
     s = str(cnae).strip()
     if not s.isdigit() or len(s) < 2:
@@ -346,34 +355,75 @@ def _write_meta(dest: Path, url: str, periodo: str) -> None:
 # API pública: download
 # ---------------------------------------------------------------------------
 
-def download(periodo: str = DEFAULT_PERIODO, force: bool = False) -> list[Path]:
+def download(
+    periodo: str = DEFAULT_PERIODO,
+    force: bool = False,
+    max_workers: int = 4,
+) -> list[Path]:
     """Baixa o snapshot CNPJ Dados Abertos para um período (YYYY-MM).
 
+    Faz download paralelo (N arquivos simultâneos) via ``_http.download_many``.
     Não baixa Empresas*.zip — não são necessários para os recortes da Etapa 2.
 
     Args:
-        periodo: 'YYYY-MM' do snapshot (default: 2026-04, validado).
+        periodo: 'YYYY-MM' do snapshot (ex.: '2025-03').
         force: sobrescreve mesmo se já existir.
+        max_workers: downloads simultâneos (default 4 — bom equilíbrio
+            entre throughput agregado e respeito ao server-side rate limit
+            da RFB).
 
     Returns:
         Lista de caminhos baixados em data/raw/mei/<periodo>/.
     """
+    from src.ingest._http import DownloadItem, download_many
+
     paths.ensure_dirs()
     dest_dir = paths.RAW_MEI / periodo
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    baixados: list[Path] = []
-    for nome in ARQUIVOS_ALVO:
-        url = f"{WEBDAV_BASE}/{periodo}/{nome}"
-        dest = dest_dir / nome
-        existed = dest.exists()
-        _http_download(url, dest, force=force)
-        # Recalcula meta se o download ocorreu OU se .meta.json não existe.
-        meta_path = dest.with_suffix(dest.suffix + ".meta.json")
-        if (not existed) or force or (not meta_path.exists()):
-            _write_meta(dest, url, periodo)
-        baixados.append(dest)
-    return baixados
+    items = [
+        DownloadItem(
+            url=f"{WEBDAV_BASE}/{periodo}/{nome}",
+            dest=dest_dir / nome,
+            auth=AUTH,
+            meta_extra={"periodo": periodo},
+        )
+        for nome in ARQUIVOS_ALVO
+    ]
+    return download_many(items, max_workers=max_workers, force=force)
+
+
+def download_periodos(
+    periodos: list[str],
+    force: bool = False,
+    max_workers: int = 4,
+) -> dict[str, list[Path]]:
+    """Baixa múltiplos snapshots MEI em paralelo cross-período.
+
+    Achata todos os arquivos de todos os períodos numa única lista e os
+    distribui entre os ``max_workers``. Isso permite, p.ex., baixar
+    Simples.zip de 4 períodos em paralelo enquanto outro worker pega o
+    primeiro Estabelecimentos.zip — aproveita ao máximo a banda agregada.
+    """
+    from src.ingest._http import DownloadItem, download_many
+
+    paths.ensure_dirs()
+    items: list[DownloadItem] = []
+    indice: dict[str, list[Path]] = {p: [] for p in periodos}
+    for periodo in periodos:
+        dest_dir = paths.RAW_MEI / periodo
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for nome in ARQUIVOS_ALVO:
+            dest = dest_dir / nome
+            indice[periodo].append(dest)
+            items.append(DownloadItem(
+                url=f"{WEBDAV_BASE}/{periodo}/{nome}",
+                dest=dest,
+                auth=AUTH,
+                meta_extra={"periodo": periodo},
+            ))
+    download_many(items, max_workers=max_workers, force=force)
+    return indice
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +636,7 @@ def filter_mei(dumps_dir: Path, periodo: str = DEFAULT_PERIODO) -> Path:
     })
 
     # ----- Passo 4: persistência -----
-    final_path = paths.DATA_PROCESSED / "mei_ativos.parquet"
+    final_path = paths.DATA_PROCESSED / f"mei_ativos_{periodo}.parquet"
     final_path.parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(final_path, index=False, compression="snappy")
     logger.info(
@@ -640,25 +690,45 @@ def filter_mei(dumps_dir: Path, periodo: str = DEFAULT_PERIODO) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--periodo", default=DEFAULT_PERIODO,
-                        help=f"snapshot YYYY-MM (default: {DEFAULT_PERIODO})")
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument("--periodo", default=None,
+                     help=f"snapshot único YYYY-MM (default: {DEFAULT_PERIODO})")
+    grp.add_argument("--periodos", default=None,
+                     help="lista de snapshots separados por vírgula, "
+                          "ex.: 2025-03,2025-06,2025-09,2025-12")
     parser.add_argument("--force", action="store_true",
                         help="re-baixa mesmo que ZIPs já existam")
     parser.add_argument("--skip-download", action="store_true",
                         help="usa apenas ZIPs já presentes em data/raw/mei/<periodo>/")
+    parser.add_argument("--max-workers", type=int, default=4,
+                        help="downloads simultâneos (default 4, máx recomendado 6)")
     args = parser.parse_args()
 
-    paths.ensure_dirs()
-    if args.skip_download:
-        dumps_dir = paths.RAW_MEI / args.periodo
-        if not dumps_dir.exists():
-            raise SystemExit(f"--skip-download mas {dumps_dir} não existe.")
+    if args.periodos:
+        periodos = [p.strip() for p in args.periodos.split(",") if p.strip()]
     else:
-        baixados = download(periodo=args.periodo, force=args.force)
-        dumps_dir = baixados[0].parent
+        periodos = [args.periodo or DEFAULT_PERIODO]
 
-    final = filter_mei(dumps_dir, periodo=args.periodo)
-    print(f"MEI processado: {final}")
+    paths.ensure_dirs()
+    if not args.skip_download:
+        if len(periodos) == 1:
+            download(periodo=periodos[0], force=args.force, max_workers=args.max_workers)
+        else:
+            logger.info("Download em série de %d snapshots: %s",
+                        len(periodos), ", ".join(periodos))
+            download_periodos(periodos, force=args.force, max_workers=args.max_workers)
+
+    finais: list[Path] = []
+    for periodo in periodos:
+        dumps_dir = paths.RAW_MEI / periodo
+        if not dumps_dir.exists():
+            raise SystemExit(f"{dumps_dir} não existe — rode o download primeiro.")
+        final = filter_mei(dumps_dir, periodo=periodo)
+        finais.append(final)
+
+    print("MEI processado:")
+    for f in finais:
+        print(f"  - {f}")
 
 
 if __name__ == "__main__":

@@ -1,20 +1,20 @@
-"""Watchdog + orquestrador para a ingestão MEI.
+"""Watchdog + orquestrador para a ingestão MEI (multi-período).
 
 Faz três coisas em paralelo:
-1. Mantém UM processo `python -m src.ingest.mei --periodo <X>` rodando.
+1. Mantém UM processo `python -m src.ingest.mei --periodos <lista>` rodando.
    Se ele morrer (crash) ou for morto (stall), relança automaticamente.
-   O `_http_download` patcheado retoma cada arquivo via Range, sem perder bytes.
-2. Detecta stall: se algum `.part` ficar parado > STALL_S sem crescer,
-   mata o filho — o loop principal relança e o Range continua de onde parou.
+   O `_http.download_one` retoma cada arquivo via Range, sem perder bytes.
+2. Detecta stall: se algum `.part` em qualquer período ficar parado > STALL_S
+   sem crescer, mata o filho. O loop relança e o Range continua de onde parou.
 3. Escreve `data/raw/mei/STATUS.txt` a cada INTERVALO_S com snapshot legível
-   (arquivos baixados, tamanhos, mtime, último log). O usuário pode abrir/
-   `Get-Content -Tail 30 -Wait` esse arquivo a qualquer momento.
+   de TODOS os períodos em andamento. Acompanhar com:
+       Get-Content -Path data\raw\mei\STATUS.txt -Wait
 
-Sai com código 0 quando `data/processed/mei_ativos.parquet` aparece.
+Sai com código 0 quando os parquets finais de TODOS os períodos existirem.
 Sai com código 2 em hard timeout.
 
 Uso:
-    python scripts/mei_watchdog.py [--periodo 2026-04] [--max-restarts 12]
+    python scripts/mei_watchdog.py --periodos 2025-03,2025-06,2025-09,2025-12
 """
 
 from __future__ import annotations
@@ -32,8 +32,15 @@ ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = ROOT / "data" / "raw" / "mei"
 PROC_DIR = ROOT / "data" / "processed"
 STATUS = RAW_DIR / "STATUS.txt"
-PARQUET_FINAL = PROC_DIR / "mei_ativos.parquet"
 LOG_GLOB = "run-*.log"
+
+
+def _parquet_final(periodo: str) -> Path:
+    return PROC_DIR / f"mei_ativos_{periodo}.parquet"
+
+
+def _todos_parquets_existem(periodos: list[str]) -> bool:
+    return all(_parquet_final(p).exists() for p in periodos)
 
 INTERVALO_S = 30
 STALL_S = 180          # 3 min sem .part crescer = stall
@@ -45,37 +52,54 @@ def _agora() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _snapshot(child_pid: int | None, restarts: int, periodo: str) -> str:
+def _snapshot(child_pid: int | None, restarts: int, periodos: list[str]) -> str:
     linhas: list[str] = []
     elapsed = time.time() - START_TS
     linhas.append(f"=== MEI WATCHDOG @ {_agora()}  (decorrido: {elapsed/60:.1f} min) ===")
-    linhas.append(f"Snapshot alvo: {periodo}")
+    linhas.append(f"Snapshots alvo ({len(periodos)}): {', '.join(periodos)}")
     linhas.append(
         f"Subprocesso filho: pid={child_pid if child_pid else '(nenhum)'}  "
         f"restarts={restarts}"
     )
 
-    if PARQUET_FINAL.exists():
-        sz = PARQUET_FINAL.stat().st_size / 1e6
-        linhas.append("")
-        linhas.append(f">>> SUCESSO: {PARQUET_FINAL.name} ({sz:.1f} MB) <<<")
+    # Status agregado dos parquets finais
+    prontos = [p for p in periodos if _parquet_final(p).exists()]
+    pendentes = [p for p in periodos if not _parquet_final(p).exists()]
+    linhas.append(f"\nParquets finais: {len(prontos)}/{len(periodos)} prontos")
+    if prontos:
+        for p in prontos:
+            sz = _parquet_final(p).stat().st_size / 1e6
+            linhas.append(f"  ✓ {_parquet_final(p).name} ({sz:.1f} MB)")
+    if not pendentes:
+        linhas.append("\n>>> SUCESSO TOTAL: todos os períodos processados <<<")
 
-    snap_dir = RAW_DIR / periodo
-    if snap_dir.exists():
-        linhas.append(f"\nArquivos em {snap_dir.relative_to(ROOT)}:")
-        total_bytes = 0
-        for arq in sorted(snap_dir.iterdir()):
-            sz_b = arq.stat().st_size
-            total_bytes += sz_b
-            mtime = datetime.fromtimestamp(arq.stat().st_mtime).strftime("%H:%M:%S")
-            tag = ""
+    # Detalhe por snapshot pendente
+    total_geral = 0
+    for periodo in periodos:
+        snap_dir = RAW_DIR / periodo
+        if not snap_dir.exists():
+            linhas.append(f"\n[{periodo}] (pasta ainda não criada)")
+            continue
+        sub_total = 0
+        n_part = 0
+        n_zip = 0
+        for arq in snap_dir.iterdir():
+            sub_total += arq.stat().st_size
             if arq.suffix == ".part":
-                age = time.time() - arq.stat().st_mtime
-                tag = f"  [parado {age:.0f}s]" if age > 60 else "  [crescendo]"
-            linhas.append(
-                f"  {arq.name:42s} {sz_b/1e6:9.2f} MB  mtime={mtime}{tag}"
-            )
-        linhas.append(f"  {'TOTAL':42s} {total_bytes/1e9:9.2f} GB")
+                n_part += 1
+            elif arq.suffix == ".zip":
+                n_zip += 1
+        total_geral += sub_total
+        linhas.append(f"\n[{periodo}] {n_zip} ZIPs · {n_part} .part · {sub_total/1e9:.2f} GB")
+        # Mostra apenas .part (mais informativo durante download)
+        for arq in sorted(snap_dir.glob("*.part")):
+            sz_b = arq.stat().st_size
+            mtime = datetime.fromtimestamp(arq.stat().st_mtime).strftime("%H:%M:%S")
+            age = time.time() - arq.stat().st_mtime
+            tag = f"[parado {age:.0f}s]" if age > 60 else "[crescendo]"
+            linhas.append(f"    {arq.name:30s} {sz_b/1e6:9.2f} MB  mtime={mtime} {tag}")
+
+    linhas.append(f"\nTotal em data/raw/mei/: {total_geral/1e9:.2f} GB")
 
     logs = sorted(RAW_DIR.glob(LOG_GLOB))
     if logs:
@@ -94,16 +118,19 @@ def _abrir_log() -> Path:
     return RAW_DIR / f"run-{datetime.now().strftime('%Y-%m-%d')}.log"
 
 
-def _spawn(periodo: str) -> tuple[subprocess.Popen, Path]:
+def _spawn(periodos: list[str], max_workers: int) -> tuple[subprocess.Popen, Path]:
     log_path = _abrir_log()
     log_fh = log_path.open("ab")
-    log_fh.write(f"\n\n=== {_agora()} :: spawn `python -m src.ingest.mei --periodo {periodo}` ===\n".encode())
+    csv_periodos = ",".join(periodos)
+    cmd = [
+        sys.executable, "-u", "-m", "src.ingest.mei",
+        "--periodos", csv_periodos,
+        "--max-workers", str(max_workers),
+    ]
+    log_fh.write(f"\n\n=== {_agora()} :: spawn `{' '.join(cmd)}` ===\n".encode())
     log_fh.flush()
     proc = subprocess.Popen(
-        [sys.executable, "-u", "-m", "src.ingest.mei", "--periodo", periodo],
-        cwd=str(ROOT),
-        stdout=log_fh,
-        stderr=subprocess.STDOUT,
+        cmd, cwd=str(ROOT), stdout=log_fh, stderr=subprocess.STDOUT,
     )
     return proc, log_path
 
@@ -127,10 +154,14 @@ def _matar(proc: subprocess.Popen) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--periodo", default="2026-04")
+    parser.add_argument("--periodos", required=True,
+                        help="lista de snapshots, ex.: 2025-03,2025-06,2025-09,2025-12")
+    parser.add_argument("--max-workers", type=int, default=4,
+                        help="downloads simultâneos do filho mei.py")
     parser.add_argument("--max-restarts", type=int, default=20)
     args = parser.parse_args()
 
+    periodos = [p.strip() for p in args.periodos.split(",") if p.strip()]
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
     proc: subprocess.Popen | None = None
@@ -138,7 +169,7 @@ def main() -> int:
     last_part_size: dict[str, int] = {}
     last_part_change: dict[str, float] = {}
 
-    print(f"[watchdog] iniciando para snapshot {args.periodo}", file=sys.stderr)
+    print(f"[watchdog] iniciando para snapshots {periodos}", file=sys.stderr)
     print(f"[watchdog] STATUS em {STATUS}", file=sys.stderr)
 
     try:
@@ -149,19 +180,19 @@ def main() -> int:
                 if proc:
                     _matar(proc)
                 STATUS.write_text(
-                    _snapshot(proc.pid if proc else None, restarts, args.periodo)
+                    _snapshot(proc.pid if proc else None, restarts, periodos)
                     + "\n!!! HARD TIMEOUT 5h !!!\n",
                     encoding="utf-8",
                 )
                 return 2
 
-            # Sucesso?
-            if PARQUET_FINAL.exists():
-                print("[watchdog] parquet final detectado", file=sys.stderr)
+            # Sucesso = todos os parquets prontos
+            if _todos_parquets_existem(periodos):
+                print("[watchdog] todos os parquets finais detectados", file=sys.stderr)
                 if proc and proc.poll() is None:
-                    proc.wait(timeout=5)
+                    proc.wait(timeout=10)
                 STATUS.write_text(
-                    _snapshot(proc.pid if proc else None, restarts, args.periodo),
+                    _snapshot(proc.pid if proc else None, restarts, periodos),
                     encoding="utf-8",
                 )
                 return 0
@@ -178,27 +209,28 @@ def main() -> int:
                     espera = min(60, 5 * (2 ** min(restarts, 5)))
                     print(f"[watchdog] aguardando {espera}s antes de relançar...", file=sys.stderr)
                     time.sleep(espera)
-                proc, _ = _spawn(args.periodo)
+                proc, _ = _spawn(periodos, args.max_workers)
                 restarts += 1
-                # Reset de detecção de stall ao relançar
                 last_part_change.clear()
                 last_part_size.clear()
 
-            # Atualiza STATUS.txt
             try:
                 STATUS.write_text(
-                    _snapshot(proc.pid if proc else None, restarts, args.periodo),
+                    _snapshot(proc.pid if proc else None, restarts, periodos),
                     encoding="utf-8",
                 )
             except Exception as exc:
                 print(f"[watchdog] erro escrevendo STATUS: {exc}", file=sys.stderr)
 
-            # Stall detection
-            snap_dir = RAW_DIR / args.periodo
-            if snap_dir.exists():
+            # Stall detection — varre .part de TODOS os períodos
+            mato = False
+            for periodo in periodos:
+                snap_dir = RAW_DIR / periodo
+                if not snap_dir.exists():
+                    continue
                 for arq in snap_dir.glob("*.part"):
                     sz = arq.stat().st_size
-                    key = arq.name
+                    key = f"{periodo}/{arq.name}"
                     agora = time.time()
                     if last_part_size.get(key) != sz:
                         last_part_size[key] = sz
@@ -211,8 +243,10 @@ def main() -> int:
                                 file=sys.stderr,
                             )
                             _matar(proc)
-                            # próximo loop relança via Range
+                            mato = True
                             break
+                if mato:
+                    break
 
             time.sleep(INTERVALO_S)
 

@@ -170,26 +170,74 @@ A combinação **G + S** (comércio + serviços pessoais) cobre **34,5% dos MEI 
 - `municipio_codigo_ibge` ainda vazio — só temos `municipio_codigo_rfb` (TOM, 4 dígitos). De-para RFB→IBGE será implementado se a Etapa 3 exigir granularidade municipal.
 - Harmonização CNAE 2.0 ↔ 2.3 entre PNADC e MEI — ainda como TODO em `src/transform/harmonize.py::harmonize_cnae`. Para a Etapa 2, agregação por seção (A–U) é estável entre as versões.
 
-## 4. Etapa 2 — Estimativa do universo
+## 4. Etapa 2 — Estimativa do universo (executada em 2026-05-09)
 
-### 4.1 Expansão amostral
+### 4.1 Pareamento temporal PNADC × MEI
 
-PNADC requer estimadores de variância que respeitem o desenho complexo. Usar:
+Pareamento canônico para a série 2025 (estoque MEI no fim do trimestre vs amostra PNADC do trimestre):
 
+| Período | PNADC (trimestre) | MEI (snapshot fim do trimestre) |
+| --- | --- | --- |
+| 2025T1 | Jan-Mar | 2025-03 |
+| 2025T2 | Abr-Jun | 2025-06 |
+| 2025T3 | Jul-Set | 2025-09 |
+| 2025T4 | Out-Dez | 2025-12 |
+
+### 4.2 Expansão amostral (Taylor / samplics)
+
+- **Software:** `samplics 0.4.55` (Python) — `TaylorEstimator` com `param=PopParam.total`
 - **Pesos:** `V1028` (calibrado)
 - **Estratos:** `Estrato`
 - **PSU:** `UPA`
-- **Software:** `samplics` (Python) ou `survey` (R) — implementação manual deve ser justificada
+- **Tratamento de estratos com 1 UPA:** `single_psu=SinglePSUEst.certainty` (ver ADR-008)
+- **Domínio:** `UF` (estimativas por estado)
+- **Confiança:** IC 95% (alpha=0.05)
+- **Implementação:** `src/analysis/universe_estimator.py::estimar_universo_uf`
 
-(Documentar memorial de cálculo após execução.)
+### 4.3 Cruzamento PNADC × MEI
 
-### 4.2 Cruzamento PNADC × MEI
+Cruzamento agregado por UF (não por CPF — MEI é dado administrativo):
 
-(Documentar abordagem após execução.)
+- `mei_ativos_total`: contagem direta do cadastro MEI (não amostra)
+- `taxa_formalizacao_aprox = min(mei_ativos / total_nano_estimado, 1.0)`
+- `informais_aprox = total_nano_estimado − min(mei_ativos, total_nano_estimado)`
 
-## 5. Etapa 3 — Caracterização socioeconômica
+**Limitação importante:** o teto MEI vigente (R$ 81 mil/ano até 2024) é maior que o teto nano (R$ 40 mil). Logo, **nem todo MEI é nano-empreendedor** — uma fração dos MEI tem renda > R$ 40 mil/ano. Resultado: a `taxa_formalizacao_aprox` é uma cota superior; o número real de "MEIs com renda nano" é menor. Em SP, por exemplo, a taxa de 98% provavelmente reflete essa contaminação. Refinamento possível em iteração futura: estimar a fração de MEI com renda > R$ 40 mil a partir da própria PNADC (conta-própria com renda > 40k formalizado / total conta-própria > 40k).
 
-(Documentar análises e recortes após execução.)
+### 4.4 Resultados (série 2025)
+
+Tabela completa em `outputs/tabelas/etapa2/nano_serie_temporal.csv`. Resumo Brasil:
+
+| Período | Total nano estimado | CV médio (%) |
+| --- | --- | --- |
+| 2025T1 | 19.405.869 | ~4 |
+| 2025T2 | 19.452.967 | ~4 |
+| 2025T3 | 19.434.042 | ~4 |
+| 2025T4 | 19.155.732 | ~4 |
+
+**Achado principal:** universo nano-empreendedor estável em ~19,4 milhões durante 2025; MEI ativos cresceram ~10-15% no mesmo período (de 13,02M no fim de T4) — evidência de **migração informal → formal em curso**.
+
+## 5. Etapa 3 — Caracterização socioeconômica (executada em 2026-05-09)
+
+Implementação em `src/analysis/profiles.py`. Quatro tabelas em `outputs/tabelas/etapa3/`:
+
+### 5.1 Perfil demográfico
+
+`perfil_demografico.csv` — distribuição ponderada por UF × dimensão × valor, para 4 dimensões: sexo, faixa etária (14-24, 25-49, 50+), cor/raça, escolaridade. 1.513 linhas (4 períodos × 27 UFs × ~14 categorias agregadas).
+
+### 5.2 Perfil econômico
+
+`perfil_economico.csv` — média e mediana ponderadas do `renda_mensal_brl` por UF. 108 linhas (4 períodos × 27 UFs).
+
+### 5.3 Perfil setorial
+
+`perfil_setorial.csv` — distribuição ponderada por seção CNAE (A-U) × UF. ~1.821 linhas. Sobre `cnae_secao`: derivado de `V4013` via tabela divisão→seção (ver ADR-009; `V40132` veio vazia em 2025).
+
+### 5.4 Recorte estratégico ABEVD
+
+`perfil_recorte_abevd.csv` — **mulheres 25-49 anos** atuando em **Comércio (G) ou Serviços pessoais (S)** como nano-empreendedoras. Esse é o público naturalmente alinhado ao modelo de venda direta.
+
+**Achado:** **1,14 milhão de mulheres** no Brasil em 2025T4. Top UFs: SP (247k), MG (148k), RJ (124k), BA (77k), PE (55k), RS (50k), CE (48k), PR (45k), GO (44k), PA (39k). Representa 5-8% do universo nano em cada UF.
 
 ## 6. Limitações conhecidas
 

@@ -205,8 +205,23 @@ def _carregar_layout() -> pd.DataFrame:
 # API pública
 # ---------------------------------------------------------------------------
 
+def _garantir_dicionario() -> None:
+    """Baixa e extrai o dicionário/input SAS da PNADC (1x, idempotente)."""
+    from src.ingest._http import DownloadItem, download_one
+
+    paths.ensure_dirs()
+    dicionario_zip = paths.RAW_PNADC / "Dicionario_e_input_20221031.zip"
+    download_one(DownloadItem(url=DICIONARIO_ZIP_URL, dest=dicionario_zip))
+    sas_input = paths.RAW_PNADC / "input_PNADC_trimestral.sas"
+    if not sas_input.exists():
+        with zipfile.ZipFile(dicionario_zip) as zf:
+            zf.extractall(paths.RAW_PNADC)
+
+
 def download(trimestre: str, force: bool = False) -> Path:
-    """Baixa o pacote da PNADC para um trimestre.
+    """Baixa o pacote da PNADC para um trimestre, com resiliência.
+
+    Usa ``_http.download_one`` (Range resumption + read timeout + retry).
 
     Args:
         trimestre: string no formato 'YYYYQn', ex. '2025Q4'.
@@ -215,37 +230,45 @@ def download(trimestre: str, force: bool = False) -> Path:
     Returns:
         Caminho do arquivo bruto baixado em data/raw/pnadc/.
     """
-    paths.ensure_dirs()
+    from src.ingest._http import DownloadItem, download_one
 
-    # 0) Garante o dicionário/input (necessário para o parser).
-    dicionario_zip = paths.RAW_PNADC / "Dicionario_e_input_20221031.zip"
-    _http_get(DICIONARIO_ZIP_URL, dicionario_zip)
-    sas_input = paths.RAW_PNADC / "input_PNADC_trimestral.sas"
-    if not sas_input.exists():
-        with zipfile.ZipFile(dicionario_zip) as zf:
-            zf.extractall(paths.RAW_PNADC)
-
-    # 1) Resolve URL do trimestre (com fallback).
+    _garantir_dicionario()
     trim_eff, url, nome = _resolver_url_trimestre(trimestre)
     dest = paths.RAW_PNADC / nome
-
-    # 2) Download.
-    _http_get(url, dest, force=force)
-
-    # 3) Salva metadados.
-    meta = {
-        "trimestre_solicitado": trimestre,
-        "trimestre_efetivo": trim_eff,
-        "url": url,
-        "arquivo": nome,
-        "tamanho_bytes": dest.stat().st_size,
-        "sha256": _sha256(dest),
-        "baixado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-    meta_path = dest.with_suffix(dest.suffix + ".meta.json")
-    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Metadados gravados: %s", meta_path.name)
+    download_one(
+        DownloadItem(
+            url=url, dest=dest,
+            meta_extra={
+                "trimestre_solicitado": trimestre,
+                "trimestre_efetivo": trim_eff,
+            },
+        ),
+        force=force,
+    )
     return dest
+
+
+def download_trimestres(
+    trimestres: list[str],
+    force: bool = False,
+    max_workers: int = 4,
+) -> list[Path]:
+    """Baixa múltiplos trimestres da PNADC em paralelo."""
+    from src.ingest._http import DownloadItem, download_many
+
+    _garantir_dicionario()
+    items: list[DownloadItem] = []
+    for trim in trimestres:
+        trim_eff, url, nome = _resolver_url_trimestre(trim)
+        items.append(DownloadItem(
+            url=url,
+            dest=paths.RAW_PNADC / nome,
+            meta_extra={
+                "trimestre_solicitado": trim,
+                "trimestre_efetivo": trim_eff,
+            },
+        ))
+    return download_many(items, max_workers=max_workers, force=force)
 
 
 def parse(arquivo_bruto: Path) -> Path:
@@ -359,7 +382,14 @@ def process(parquet_interim: Path) -> Path:
     out["renda_mensal_brl"] = pd.to_numeric(df["VD4019"], errors="coerce")
     out["renda_anual_brl"] = out["renda_mensal_brl"].fillna(0) * 12
     out["cnae_classe"] = df.get("V4013", pd.Series([None] * len(df))).astype("string")
-    out["cnae_secao"] = df.get("V40132", pd.Series([None] * len(df))).astype("string")  # já vem como seção (1 caractere)
+    # V40132 (seção CNAE como letra) costumava vir preenchido em microdados
+    # antigos, mas em PNADC 2025 o IBGE entrega vazio. Derivamos a seção a
+    # partir das primeiras 2 posições de V4013 (divisão CNAE 2.0) usando a
+    # tabela divisão→seção definida em src/ingest/mei.py::CNAE_DIVISAO_TO_SECAO.
+    from src.ingest.mei import cnae_para_secao
+    out["cnae_secao"] = (
+        out["cnae_classe"].map(cnae_para_secao).astype("category")
+    )
 
     # Pesos e desenho amostral — preservados na base processada (Etapa 2).
     out["peso_amostral"] = pd.to_numeric(df["V1028"], errors="coerce")
@@ -407,15 +437,44 @@ def process(parquet_interim: Path) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--trimestre", required=True, help="ex.: 2025Q4")
+    grp = parser.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--trimestre", help="ex.: 2025Q4")
+    grp.add_argument("--trimestres",
+                     help="lista separada por vírgula, ex.: 2025Q1,2025Q2,2025Q3,2025Q4")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--max-workers", type=int, default=4,
+                        help="downloads simultâneos quando usar --trimestres (default 4)")
+    parser.add_argument("--skip-download", action="store_true",
+                        help="usa apenas ZIPs já presentes em data/raw/pnadc/")
     args = parser.parse_args()
 
+    if args.trimestres:
+        trimestres = [t.strip() for t in args.trimestres.split(",") if t.strip()]
+    else:
+        trimestres = [args.trimestre]
+
     paths.ensure_dirs()
-    bruto = download(args.trimestre, force=args.force)
-    interim = parse(bruto)
-    final = process(interim)
-    print(f"PNADC {args.trimestre} processada: {final}")
+    if not args.skip_download:
+        if len(trimestres) == 1:
+            download(trimestres[0], force=args.force)
+        else:
+            logger.info("Baixando %d trimestres em paralelo: %s",
+                        len(trimestres), ", ".join(trimestres))
+            download_trimestres(trimestres, force=args.force, max_workers=args.max_workers)
+
+    finais: list[Path] = []
+    for trim in trimestres:
+        # Resolve nome de arquivo do trimestre (mesmo path resolver do download)
+        _, _, nome = _resolver_url_trimestre(trim)
+        bruto = paths.RAW_PNADC / nome
+        if not bruto.exists():
+            raise SystemExit(f"{bruto} não existe — rode o download primeiro.")
+        interim = parse(bruto)
+        finais.append(process(interim))
+
+    print("PNADC processada:")
+    for f in finais:
+        print(f"  - {f}")
 
 
 if __name__ == "__main__":
